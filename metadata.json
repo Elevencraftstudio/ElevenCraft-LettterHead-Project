@@ -1,0 +1,6 @@
+{
+  "name": "Professional Letterhead Builder",
+  "description": "Create, customize, and export clean, professional company letterheads with custom logos, layouts, and typography. Write letters directly on the canvas and export to PDF or print.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
