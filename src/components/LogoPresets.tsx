@@ -10,6 +10,7 @@ interface LogoPresetProps {
   primaryColor: string;
   secondaryColor: string;
   className?: string;
+  id?: string;
 }
 
 export const LOGO_PRESETS = [

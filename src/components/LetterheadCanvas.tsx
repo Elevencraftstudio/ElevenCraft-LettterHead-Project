@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { CompanyDetails, LetterContent, StyleConfig, ProposalContent, DocumentMode } from '../types';
 import { LogoPreset } from './LogoPresets';
 import { MapPin, Phone, Mail, Globe, Calendar, FileText } from 'lucide-react';
@@ -17,7 +17,7 @@ interface LetterheadCanvasProps {
   proposal?: ProposalContent;
 }
 
-export const LetterheadCanvas: React.FC<LetterheadCanvasProps> = ({
+const LetterheadCanvasBase: React.FC<LetterheadCanvasProps> = ({
   company,
   letter,
   style,
@@ -25,8 +25,7 @@ export const LetterheadCanvas: React.FC<LetterheadCanvasProps> = ({
   docMode = 'letter' as DocumentMode,
   proposal
 }) => {
-  // Get font pair classes
-  const getFontClasses = () => {
+  const fonts = useMemo(() => {
     switch (style.fontPair) {
       case 'executive':
         return {
@@ -54,12 +53,9 @@ export const LetterheadCanvas: React.FC<LetterheadCanvasProps> = ({
           meta: 'font-[Inter]'
         };
     }
-  };
+  }, [style.fontPair]);
 
-  const fonts = getFontClasses();
-
-  // Paper background colors
-  const getPaperBgClass = () => {
+  const paperBgClass = useMemo(() => {
     switch (style.paperBackground) {
       case 'cream-texture':
         return 'bg-[#FCF8F2]';
@@ -69,7 +65,7 @@ export const LetterheadCanvas: React.FC<LetterheadCanvasProps> = ({
       default:
         return 'bg-white';
     }
-  };
+  }, [style.paperBackground]);
 
   // Render Logo depending on type
   const renderLogo = (logoSizeClass: string = "w-10 h-10") => {
@@ -127,7 +123,7 @@ export const LetterheadCanvas: React.FC<LetterheadCanvasProps> = ({
   return (
     <div
       id="letterhead-print-canvas"
-      className={`shadow-2xl relative select-text text-gray-800 transition-all origin-top duration-300 ${getPaperBgClass()} mx-auto border border-gray-200/50 print:border-none print:shadow-none`}
+      className={`shadow-2xl relative select-text text-gray-800 transition-all origin-top duration-300 ${paperBgClass} mx-auto border border-gray-200/50 print:border-none print:shadow-none`}
       style={{
         width: '210mm',
         height: '297mm',
@@ -723,4 +719,6 @@ const renderDocumentContent = (
       {renderClosingBlock(letter, fonts, style)}
     </div>
   );
-};;
+}
+
+export const LetterheadCanvas = React.memo(LetterheadCanvasBase);
