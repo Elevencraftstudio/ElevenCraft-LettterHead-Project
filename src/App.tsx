@@ -32,6 +32,32 @@ import { CompanyDetails, LetterContent, StyleConfig, LayoutTheme, ProposalConten
 import { LetterheadCanvas } from './components/LetterheadCanvas';
 import { LOGO_PRESETS } from './components/LogoPresets';
 import { SignaturePad } from './components/SignaturePad';
+import { 
+  auth, 
+  db, 
+  googleProvider, 
+  handleFirestoreError, 
+  OperationType, 
+  testConnection 
+} from './lib/firebase';
+import { 
+  onAuthStateChanged, 
+  signInWithPopup, 
+  signOut, 
+  User 
+} from 'firebase/auth';
+import { 
+  collection, 
+  doc, 
+  setDoc, 
+  query, 
+  where, 
+  orderBy, 
+  deleteDoc, 
+  serverTimestamp, 
+  onSnapshot 
+} from 'firebase/firestore';
+import { LogIn, LogOut, Save, Database, Cloud } from 'lucide-react';
 
 // PRESET LETTER TEMPLATES FOR THE USER
 const PRESET_LETTER_TEMPLATES = [
@@ -162,10 +188,150 @@ export default function App() {
   });
 
   // Workspace configuration controls
-  const [activeTab, setActiveTab] = useState<'brand' | 'layout' | 'content' | 'signature'>('brand');
+  const [activeTab, setActiveTab] = useState<'brand' | 'layout' | 'content' | 'signature' | 'cloud'>('brand');
   const [previewScale, setPreviewScale] = useState<number>(0.75);
   const [isCappingScreen, setIsCappingScreen] = useState<boolean>(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
+
+  // Firebase Auth and Database persistence states
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [savedDocs, setSavedDocs] = useState<any[]>([]);
+  const [isLoadingDocs, setIsLoadingDocs] = useState<boolean>(false);
+  const [documentSaveTitle, setDocumentSaveTitle] = useState<string>('');
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [activeFirebaseDocId, setActiveFirebaseDocId] = useState<string | null>(null);
+
+  // Authenticate using Google login
+  const handleGoogleSignIn = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err) {
+      console.error('Login error:', err);
+    }
+  };
+
+  // Sign out
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      // Reset loaded document ID and clear states
+      setActiveFirebaseDocId(null);
+      setSavedDocs([]);
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
+  };
+
+  // Test connection on mount and listen to auth changes
+  useEffect(() => {
+    testConnection();
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Listen / Fetch user's saved documents when logged in
+  useEffect(() => {
+    if (!currentUser) {
+      setSavedDocs([]);
+      return;
+    }
+
+    setIsLoadingDocs(true);
+    const q = query(
+      collection(db, 'documents'),
+      where('userId', '==', currentUser.uid),
+      orderBy('updatedAt', 'desc')
+    );
+
+    // Use onSnapshot for real-time synchronization as per Firebase Guidelines
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const docs: any[] = [];
+      snapshot.forEach((doc) => {
+        docs.push({ id: doc.id, ...doc.data() });
+      });
+      setSavedDocs(docs);
+      setIsLoadingDocs(false);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'documents');
+      setIsLoadingDocs(false);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  // Save or Update Document in Firestore
+  const handleSaveDocument = async (customTitle?: string) => {
+    if (!currentUser) return;
+
+    const titleToUse = customTitle || documentSaveTitle || `My Design (${new Date().toLocaleDateString()})`;
+    setIsSaving(true);
+
+    const docId = activeFirebaseDocId || doc(collection(db, 'documents')).id;
+    const docData: any = {
+      id: docId,
+      userId: currentUser.uid,
+      title: titleToUse,
+      docMode,
+      company,
+      letter,
+      proposal,
+      style,
+      updatedAt: serverTimestamp()
+    };
+
+    try {
+      const docRef = doc(db, 'documents', docId);
+      
+      if (!activeFirebaseDocId) {
+        // Create new
+        await setDoc(docRef, {
+          ...docData,
+          createdAt: serverTimestamp()
+        });
+        setActiveFirebaseDocId(docId);
+      } else {
+        // Update existing (merge with existing)
+        await setDoc(docRef, docData, { merge: true });
+      }
+      
+      setDocumentSaveTitle('');
+      setIsSaving(false);
+    } catch (error) {
+      handleFirestoreError(error, activeFirebaseDocId ? OperationType.UPDATE : OperationType.CREATE, `documents/${docId}`);
+      setIsSaving(false);
+    }
+  };
+
+  // Load a document
+  const handleLoadDocument = (savedDoc: any) => {
+    setActiveFirebaseDocId(savedDoc.id);
+    setDocMode(savedDoc.docMode);
+    setCompany(savedDoc.company);
+    setLetter(savedDoc.letter);
+    if (savedDoc.proposal) {
+      setProposal(savedDoc.proposal);
+    }
+    setStyle(savedDoc.style);
+  };
+
+  // Delete a document
+  const handleDeleteDocument = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Avoid triggering loading selection
+    if (!currentUser) return;
+
+    try {
+      await deleteDoc(doc(db, 'documents', id));
+      if (activeFirebaseDocId === id) {
+        setActiveFirebaseDocId(null);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `documents/${id}`);
+    }
+  };
 
   // Resize listener to optimize initial zoom value for scaling
   useEffect(() => {
@@ -252,7 +418,7 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col no-print" id="applet-viewport font-sans selection:bg-indigo-500/30">
+    <div className="min-h-screen bg-slate-900 text-slate-100 font-sans flex flex-col" id="applet-viewport">
       
       {/* 1. APP BAR HEADER */}
       <header className="bg-slate-950 border-b border-slate-800 py-3 px-6 h-16 flex items-center justify-between shadow-lg sticky top-0 z-50 no-print" id="letterhead-navigation-bar">
@@ -270,6 +436,27 @@ export default function App() {
 
         {/* Action Triggers */}
         <div className="flex items-center gap-2">
+          {/* Firebase user indicator */}
+          {currentUser && (
+            <div className="hidden sm:flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg py-1 pl-1.5 pr-2.5 text-xs text-slate-300">
+              {currentUser.photoURL ? (
+                <img
+                  src={currentUser.photoURL}
+                  alt={currentUser.displayName || 'User'}
+                  className="w-5 h-5 rounded-full border border-indigo-500/30"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-5 h-5 bg-indigo-600/30 text-indigo-400 rounded-full flex items-center justify-center text-[10px] font-bold">
+                  {currentUser.displayName ? currentUser.displayName[0].toUpperCase() : 'U'}
+                </div>
+              )}
+              <span className="font-semibold text-slate-300 truncate max-w-[100px]">
+                {currentUser.displayName?.split(' ')[0]}
+              </span>
+            </div>
+          )}
+
           {/* Zoom Controls (Canvas Utility) */}
           <div className="bg-slate-900 border border-slate-800 rounded-lg flex items-center px-1 py-0.5 gap-1.5 text-xs text-slate-300">
             <button 
@@ -351,7 +538,7 @@ export default function App() {
             >
               <div className="flex flex-col items-center gap-1">
                 <Briefcase size={14} />
-                <span>1. Brand Identity</span>
+                <span>1. Brand</span>
               </div>
               {activeTab === 'brand' && (
                 <motion.div layoutId="activeTabIndicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500" />
@@ -365,7 +552,7 @@ export default function App() {
             >
               <div className="flex flex-col items-center gap-1">
                 <Layout size={14} />
-                <span>2. Design Style</span>
+                <span>2. Style</span>
               </div>
               {activeTab === 'layout' && (
                 <motion.div layoutId="activeTabIndicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500" />
@@ -379,7 +566,7 @@ export default function App() {
             >
               <div className="flex flex-col items-center gap-1">
                 <FileText size={14} />
-                <span>3. Correspondence</span>
+                <span>3. Content</span>
               </div>
               {activeTab === 'content' && (
                 <motion.div layoutId="activeTabIndicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500" />
@@ -393,9 +580,23 @@ export default function App() {
             >
               <div className="flex flex-col items-center gap-1">
                 <Signature size={14} />
-                <span>4. Signoff Details</span>
+                <span>4. Signoff</span>
               </div>
               {activeTab === 'signature' && (
+                <motion.div layoutId="activeTabIndicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500" />
+              )}
+            </button>
+            <button
+              onClick={() => setActiveTab('cloud')}
+              className={`flex-1 py-3 text-center font-semibold text-xs transition relative ${
+                activeTab === 'cloud' ? 'text-indigo-400' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <div className="flex flex-col items-center gap-1">
+                <Cloud size={14} />
+                <span>5. Cloud</span>
+              </div>
+              {activeTab === 'cloud' && (
                 <motion.div layoutId="activeTabIndicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500" />
               )}
             </button>
@@ -1428,6 +1629,214 @@ export default function App() {
                       </p>
                     )}
                   </div>
+                </motion.div>
+              )}
+
+              {/* TAB 5: CLOUD PERSISTENCE & USER SYNC */}
+              {activeTab === 'cloud' && (
+                <motion.div
+                  initial={{ opacity: 0, y: 5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -5 }}
+                  className="space-y-6 animate-none"
+                  key="cloud-tab"
+                >
+                  <div className="space-y-1.5">
+                    <h3 className="text-sm font-bold tracking-wide uppercase text-slate-400 flex items-center gap-2">
+                      <Cloud size={16} className="text-indigo-400" />
+                      <span>Cloud Database Sync</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 leading-normal">
+                      Connect your account to securely store, retrieve, and organize all your custom stationery layouts on the cloud.
+                    </p>
+                  </div>
+
+                  {!currentUser ? (
+                    // Login view
+                    <div className="bg-slate-900/50 p-6 rounded-xl border border-slate-800 text-center space-y-4">
+                      <div className="w-12 h-12 bg-indigo-600/20 text-indigo-400 rounded-full flex items-center justify-center mx-auto">
+                        <Database size={24} />
+                      </div>
+                      <div className="space-y-1">
+                        <h4 className="text-sm font-bold text-slate-200">Sign in with Google</h4>
+                        <p className="text-xs text-slate-500 max-w-xs mx-auto">
+                          Access your custom letterheads, designs, and budgets from any device instantly.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleGoogleSignIn}
+                        className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition cursor-pointer"
+                      >
+                        <LogIn size={15} />
+                        <span>Connect Google Account</span>
+                      </button>
+                    </div>
+                  ) : (
+                    // Logged in view
+                    <div className="space-y-6">
+                      {/* User Profile Info */}
+                      <div className="bg-slate-900/40 p-4 rounded-xl border border-slate-800 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          {currentUser.photoURL ? (
+                            <img
+                              src={currentUser.photoURL}
+                              alt={currentUser.displayName || 'User'}
+                              className="w-9 h-9 rounded-full border border-indigo-500/30"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-9 h-9 bg-indigo-600/30 text-indigo-400 rounded-full flex items-center justify-center text-xs font-bold font-mono">
+                              {currentUser.displayName ? currentUser.displayName[0].toUpperCase() : 'U'}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <span className="text-xs font-bold text-slate-200 block truncate leading-none">
+                              {currentUser.displayName || 'User'}
+                            </span>
+                            <span className="text-[10px] text-slate-500 block truncate mt-0.5">
+                              {currentUser.email}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSignOut}
+                          className="text-slate-500 hover:text-red-400 p-1.5 rounded-lg hover:bg-slate-900/80 transition cursor-pointer"
+                          title="Sign Out"
+                        >
+                          <LogOut size={15} />
+                        </button>
+                      </div>
+
+                      {/* Save Current Document Section */}
+                      <div className="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-4">
+                        <h4 className="text-[11px] uppercase tracking-wider font-bold text-slate-300 border-b border-slate-850 pb-2 flex justify-between items-center">
+                          <span>Save current design</span>
+                          {activeFirebaseDocId && (
+                            <span className="bg-emerald-600/20 text-emerald-400 text-[9px] font-mono px-1.5 py-0.5 rounded border border-emerald-500/35">
+                              CLOUD SAVED
+                            </span>
+                          )}
+                        </h4>
+                        
+                        <div className="space-y-3">
+                          <div className="space-y-1">
+                            <label htmlFor="save-doc-title-input" className="text-[10px] uppercase font-bold text-slate-400">
+                              Document Title / Project Name
+                            </label>
+                            <input
+                              id="save-doc-title-input"
+                              type="text"
+                              value={documentSaveTitle}
+                              onChange={e => setDocumentSaveTitle(e.target.value)}
+                              placeholder={activeFirebaseDocId ? "Update existing template title..." : "e.g. Acme Q3 Proposal"}
+                              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 placeholder-slate-700"
+                            />
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleSaveDocument()}
+                            disabled={isSaving}
+                            className={`w-full text-white font-bold text-xs py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition cursor-pointer shadow-md ${
+                              isSaving 
+                                ? 'bg-slate-800 border border-slate-750 text-slate-500 cursor-not-allowed'
+                                : 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/10 hover:shadow-indigo-600/20'
+                            }`}
+                          >
+                            <Save size={15} className={isSaving ? 'animate-spin' : ''} />
+                            <span>
+                              {isSaving 
+                                ? 'Saving to Cloud...' 
+                                : activeFirebaseDocId 
+                                  ? 'Update Current Cloud Design' 
+                                  : 'Save as New Cloud Design'}
+                            </span>
+                          </button>
+                          
+                          {activeFirebaseDocId && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveFirebaseDocId(null);
+                                setDocumentSaveTitle('');
+                              }}
+                              className="w-full bg-slate-950 hover:bg-slate-900 border border-slate-850 text-slate-400 hover:text-slate-200 font-bold text-xs py-1.5 rounded-lg transition cursor-pointer"
+                            >
+                              Unlink from active Cloud document (Copy as new)
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Saved Templates Collection List */}
+                      <div className="space-y-3">
+                        <h4 className="text-[11px] uppercase tracking-wider font-bold text-slate-400">
+                          Your Saved Designs ({savedDocs.length})
+                        </h4>
+
+                        {isLoadingDocs ? (
+                          <p className="text-xs text-slate-500 text-center py-6 animate-pulse">
+                            Loading your secure cloud vault...
+                          </p>
+                        ) : savedDocs.length === 0 ? (
+                          <div className="bg-slate-950 border border-slate-850 p-6 rounded-xl text-center">
+                            <span className="text-xs text-slate-500 block">No documents found.</span>
+                            <span className="text-[10px] text-slate-600 block mt-1">
+                              Your saved templates and letters will appear here.
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
+                            {savedDocs.map((savedDoc) => {
+                              const isActive = activeFirebaseDocId === savedDoc.id;
+                              return (
+                                <div
+                                  key={savedDoc.id}
+                                  onClick={() => handleLoadDocument(savedDoc)}
+                                  className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition ${
+                                    isActive
+                                      ? 'bg-indigo-600/10 border-indigo-500/40 hover:bg-indigo-600/15'
+                                      : 'bg-slate-950/80 border-slate-850 hover:bg-slate-900 hover:border-slate-800'
+                                  }`}
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-bold text-slate-200 block truncate">
+                                        {savedDoc.title}
+                                      </span>
+                                      <span className={`text-[8px] font-mono px-1 rounded uppercase tracking-wider shrink-0 ${
+                                        savedDoc.docMode === 'proposal'
+                                          ? 'bg-purple-900/45 text-purple-300 border border-purple-500/30'
+                                          : 'bg-blue-900/45 text-blue-300 border border-blue-500/30'
+                                      }`}>
+                                        {savedDoc.docMode}
+                                      </span>
+                                    </div>
+                                    <span className="text-[9px] text-slate-500 font-mono mt-1 block">
+                                      Updated {savedDoc.updatedAt?.toDate 
+                                        ? savedDoc.updatedAt.toDate().toLocaleDateString() 
+                                        : new Date().toLocaleDateString()}
+                                    </span>
+                                  </div>
+                                  
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleDeleteDocument(savedDoc.id, e)}
+                                    className="text-slate-600 hover:text-red-400 p-1.5 rounded hover:bg-slate-900 transition ml-2 shrink-0 cursor-pointer"
+                                    title="Delete from Cloud"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>
